@@ -75,6 +75,8 @@ function main(){
   
   //----------------Fetch-workspaces------------------------
   
+   //----------------Fetch-workspaces------------------------
+  
   var base64auth = Utilities.base64Encode(apiToken + ":api_token");
   var params = {
     headers: {
@@ -91,7 +93,7 @@ function main(){
   
   var today = new Date;
   var lastYear = new Date(today);
-  lastYear.setYear(today.getYear()-1);
+  lastYear.setDate(today.getDate()-1);
   
   var props = PropertiesService.getUserProperties();
   var lastRunTime = props.getProperty(LAST_RUN_TIME_KEY);
@@ -164,11 +166,13 @@ function main(){
   
   //Logger.log(lastYear);
   //Logger.log(today);
-  var calendarEvents = targetCalendar.getEvents(lastYear, today);
+  var lastYearcal = new Date(today);
+  lastYearcal.setDate(lastYear.getDate() - 2); // -2 days because calendar fetches events within the 24hr range ot time specified. This causes Toggl to send more entries, and GCal to send less entries
+  var calendarEvents = targetCalendar.getEvents(lastYearcal, today);
   Logger.log("All calendar events length: " + calendarEvents.length);
   var calendarEventsById = {};
   
-  calendarEvents.forEach(function(event){
+  calendarEvents.forEach(function(event){    // event here is the CalendarEvent class
     var tag = event.getTag("TimeEntryID");
     //Logger.log("tag: " + tag);
     if(tag)
@@ -187,28 +191,38 @@ function main(){
   
   Object.keys(timeEntriesById).forEach(function(entryId){
     var entry = timeEntriesById[entryId];
+    var durationTimeString = " in " +((Math.floor(entry.dur / 3.6e+6) != 0) ? Math.floor(entry.dur / 3.6e+6) + "hr " : "") + Math.floor(((entry.dur / 3.6e+6) % 1) * 60) + "min";
+    //Logger.log(entry);  
+    
     if (!calendarEventsById.hasOwnProperty(entryId)){
       var resultEvent;
       failableOperation(function(){
-        resultEvent = targetCalendar.createEvent(entry.description, new Date(entry.start), new Date(entry.end), {description : createDescription(entry)});
-      });
-      resultEvent.setTag("TimeEntryID", entryId);
+        resultEvent = targetCalendar.createEvent(entry.description + durationTimeString, new Date(entry.start), new Date(entry.end), {description : createDescription(entry)});
+      }); 
+      resultEvent.setTag("TimeEntryID", entryId); 
       Logger.log("Created: "+entry.description+" ("+entryId+")");
       
     } else {
       // calendar event exists
       var event = calendarEventsById[entryId];
-      if(new Date(entry.updated) > lastRunTime && new Date(entry.updated) > event.getLastUpdated()) {
-        Logger.log("Updating: " + entry.description +" ("+entryId+")") 
-        if(event.getDescription() != createDescription(entry))
-        event.setDescription(createDescription(entry));
+      var changes = "";
+      if(new Date(entry.updated) > lastRunTime || new Date(event.getLastUpdated()) > lastRunTime) {
+         
+        if(event.getDescription() != createDescription(entry)){
+          event.setDescription(createDescription(entry));
+          changes += " Description ";
+        }
         
-        if(event.getStartTime() - new Date(entry.start) ||
-          event.getEndTime() - new Date(entry.end))
+        if(event.getStartTime() - new Date(entry.start) || event.getEndTime() - new Date(entry.end)){
           event.setTime(new Date(entry.start),new Date(entry.end));
+          changes += " Time ";
+        }
         
-        if(event.getTitle() != entry.description)
-          event.setTitle(entry.description);
+        if(event.getTitle() != entry.description + durationTimeString){
+          event.setTitle(entry.description + durationTimeString);
+          changes += " Title ";
+        }
+        Logger.log("Updating: " + entry.description +" ("+entryId+")" + " ["+changes+"]")
       }
       
       delete calendarEventsById[entryId]; // We don't need the event anymore 
@@ -218,12 +232,15 @@ function main(){
   //-----------------Remove-calendar-events--------------------
   
   //All existing events in the object now have no corresponding time entry (those who do were deleted from the object)/
-  Object.keys(calendarEventsById).forEach(function(entryId){
+  var now = new Date();
+   Object.keys(calendarEventsById).forEach(function(entryId){
     var event = calendarEventsById[entryId];
-    Logger.log("Deleting: " + event.getTitle() +" ("+entryId+")");
+     if(( new Date() - new Date(event.getStartTime()) ) / 1000 <= 57600){ // Only delete the calendar event if it is less than 12 hours old
+       Logger.log("Deleting: " + event.getTitle() +" ("+entryId+")");
     
-    failableOperation(function(){
-      event.deleteEvent();
-    });
-  });
-}
+       failableOperation(function(){
+         event.deleteEvent();
+     }) 
+    };
+  }) ;
+} 
